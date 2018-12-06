@@ -1707,10 +1707,8 @@ find_actual_dest_module_location()
 
     for l in $locations; do
         installed=$(compressed_or_uncompressed "${install_tree}/${kernelver}${l}" "${dest_module_name[${count}]}")
-        if [[ -n "${installed}" ]] && diff "${dkms_owned}" "${installed}" > /dev/null 2>&1; then
-            echo "${l}"
-            return 0
-        fi
+        echo "${l}"
+        return 0
     done
 
 }
@@ -1738,13 +1736,14 @@ do_uninstall()
         was_active="true"
         echo $""
         echo $"Status: Before uninstall, this module version was ACTIVE on this kernel."
-        # remove kabi-tracking if last instance removed
-		if [ -z "$NO_WEAK_MODULES" ]; then
-			if [[ ${weak_modules} ]] && (module_status_built $module $module_version |grep -q "installed"); then
-				echo $"Removing any linked weak-modules"
-				list_each_installed_module "$module" "$1" "$2" | ${weak_modules} ${weak_modules_no_initrd} --remove-modules
-			fi
-		fi
+    fi
+    # remove kabi-tracking if last instance removed
+    if [ -z "$NO_WEAK_MODULES" ]; then
+	    if [[ ${weak_modules} ]] && (module_status_built $module $module_version |grep -q "installed"); then
+		    echo $"Removing any linked weak-modules"
+			    list_each_installed_module "$module" "$1" "$2" | ${weak_modules} ${weak_modules_no_initrd} --remove-modules
+        fi
+    fi
 
     for ((count=0; count < ${#built_module_name[@]}; count++)); do
         real_dest_module_location="$(find_actual_dest_module_location $module $count $1 $2)"
@@ -1752,7 +1751,22 @@ do_uninstall()
         echo $"${dest_module_name[$count]}$module_suffix:"
         echo $" - Uninstallation"
         echo $"   - Deleting from: $install_tree/$1${real_dest_module_location}/"
-        rm -f "$install_tree/$1${real_dest_module_location}/${dest_module_name[$count]}$module_uncompressed_suffix"*
+
+        # Make sure the module we're removing is actually our version.  Do a
+        # file comparison of our module in /var/lib/dkms/<module>/<version>/<kernel>
+        # to the one in /lib/modules/<kernel> to be sure.  We do the file
+        # comparison instead of a simple version check since we can have
+        # different "versions" of the same versioned module, depending on if
+        # the module is compiled for a older version of the OS
+        # (module-0.7.12.fc28 vs module-0.7.12.fc29).
+        kernel_module_file="$install_tree/$1${real_dest_module_location}/${dest_module_name[$count]}$module_uncompressed_suffix"
+        our_module_file="$dkms_tree/$module/$module_version/$1/$2/module/${dest_module_name[$count]}$module_uncompressed_suffix"
+        if cmp -s "$kernel_module_file"* "$our_module_file"* ; then
+            rm -f "$kernel_module_file"*
+        else
+            echo $"   - Installed module not ours, so don't delete it."
+        fi
+
         dir_to_remove="${real_dest_module_location#/}"
         while [ "${dir_to_remove}" != "${dir_to_remove#/}" ]; do
             dir_to_remove="${dir_to_remove#/}"
@@ -1785,10 +1799,6 @@ do_uninstall()
     rm -rf "$dkms_tree/$module/kernel-$1-$2"
     #Remove modules from dkms built tree
     rm -rf "$dkms_tree/$module/$module_version/$1"
-    else
-        echo $""
-        echo $"Status: This module version was INACTIVE for this kernel."
-    fi
 
     # Run the post_remove script
     run_build_script post_remove "$post_remove"
